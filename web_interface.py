@@ -5,7 +5,31 @@ import subprocess
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import cgi, cgitb
 
+import argparse
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(description='Argument parser')
+    parser.add_argument('--input', type=str, default='parsed.txt',
+                        help='receipt pdf file path')
+    parser.add_argument('--participant', type=str, nargs='+',
+                        default=['V', 'K', 'M', 'S'],
+                        help='split participants')
+    parser.add_argument('--output', type=str, default='split.txt',
+                        help='output file name')
+    args = parser.parse_args()
+    return args
+
+args = parse_arguments()
+
 def generate_html_header(title):
+    """Generates html code for header
+
+    Args:
+        title (str): Title of the page.
+
+    Returns:
+        str: HTML header code as string.
+    """
     header = """
     <!DOCTYPE html>
     <html>
@@ -18,6 +42,11 @@ def generate_html_header(title):
 
 
 def get_html_footer():
+    """Generates html code for footer
+
+    Returns:
+        str: HTML footer code as string.
+    """
     footer = """
     </body>
     </html>
@@ -25,6 +54,15 @@ def get_html_footer():
     return footer
 
 def generate_item_template(item, users):
+    """Generates HTML code for the item and participant for the html body
+
+    Args:
+        item (List[str]): A list of item names
+        users (List[str]): A list of user participants
+    
+    Returns:
+        str: HTML code to generate parts of the body.
+    """
     user_template = """
     {0} 
     <input type="checkbox" id="{1}:{2}:cb", name="{1}:{2}:cb", value={3}>
@@ -40,8 +78,16 @@ def generate_item_template(item, users):
 
 
 def generate_html_code(item_list, users):
-    users = ['V', 'K', 'M', 'S']
-    html_code = generate_html_header("test")
+    """Generates complete HTML code to render web page
+
+    Args:
+        item_list (List[str]): List of item names
+        users (List[str]): List of participant names
+    
+    Returns:
+        str: Returns the string constaiing HTML code.
+    """
+    html_code = generate_html_header("expense-split-web-interface")
     html_code += '<form method="post" enctype="multipart/form-data">'
     for item in item_list:
         html_code += generate_item_template(item, users)
@@ -51,7 +97,15 @@ def generate_html_code(item_list, users):
     return html_code
 
 def cfloat(frac_str):
-    frac_str = frac_str.decode('utf-8')
+    """Decodes a string having fractional value and returns float
+
+    Args:
+        frac_str (str): String containing the representation of fractional num
+    
+    Returns:
+        float: floating point representation of fraction
+    """
+    #frac_str = frac_str.decode('utf-8')
     try:
         return float(frac_str)
     except ValueError:
@@ -64,7 +118,23 @@ def cfloat(frac_str):
         frac = float(num) / float(denom)
         return whole - frac if whole < 0 else whole + frac
 
+class ValueMismatch(Exception):
+    pass
+
 def parse_request(fields, old_item_list, users):
+    """Parses the POST requests into python data structure.
+    The field is a disctionary of POST request, with each element has a
+    format like '<item name>:<User>:<tf?cb?>': ['<tf value, cb value or blank>']
+
+    Args:
+        fields (Dict[Post filed: List[str data]]): Constains POST data.
+        old_item_list (List[str]): Original item list
+        users (List[str]): List of participating users
+    
+    Returns:
+        List[List[str, float, dict]]: Parsed items with expenses.
+
+    """
     updated_item_list = []
     for item in old_item_list:
         updated_item = None
@@ -99,17 +169,32 @@ def parse_request(fields, old_item_list, users):
                     expense[k] = item_expense_distribution[k]
                 updated_item = [item_name, item_value, expense]
             else:
-                print("Total value does not match")
+                raise ValueMismatch("Total value does not match")
         updated_item_list.append(updated_item)
     return updated_item_list
 
 def start_server(html_code, item_list, users):
+    """Starts the server, opens the browser, render the html page
+
+    Args:
+        html_code (string): HTML code that needs to be rendered on web-page.
+        item_list (List[str]): A list of item names.
+        users (List[str]): List of participant names.
+    """
     host_url = "http://127.0.0.1:7000"
     webbrowser.open(host_url)
     # Kill the already running process on localhost
-    subprocess.call(['fuser', '-k', '7000/tcp'])
+    try:
+        subprocess.call(['fuser', '-k', '7000/tcp'])
+    except:
+        print("Not using Ubuntu?")
     class server_request_handler(BaseHTTPRequestHandler):
+        """HTTP Request handler class
+        """
         def do_GET(self):
+            """Response to GET command.
+            Sets the content type to be sent to client.
+            """
             self.send_response(200)
             content_type = 'text/html'
             self.send_header('content-type', content_type)
@@ -118,16 +203,17 @@ def start_server(html_code, item_list, users):
             return
 
         def do_POST(self):
+            """Response to POST commands
+            Parses the client request, including the check box and text field.
+            """
             ctype, pdict = cgi.parse_header(self.headers.get('content-type'))
             pdict['boundary'] = bytes(pdict['boundary'], 'utf-8')
             content_len = int(self.headers.get('content-length'))
             pdict['CONTENT-LENGHT'] = content_len
             if ctype == 'multipart/form-data':
                 fields = cgi.parse_multipart(self.rfile, pdict)
-                #print(fields)
                 updated_item_list = parse_request(fields, item_list, users)
-                #print(updated_item_list)
-                with open("split.txt", "w") as f:
+                with open(args.output, "w") as f:
                     f.write(str(updated_item_list))
             self.send_response(301)
             self.send_header('content-type', 'text/html')
@@ -139,7 +225,7 @@ def start_server(html_code, item_list, users):
 
 if __name__ == "__main__":
     item_list = None
-    with open("parsed.txt", "r") as file:
+    with open(args.input, "r") as file:
         item_list = eval(file.readline())
-    user_list = ['V', 'K', 'M', 'S']
+    user_list = args.participant
     start_server(generate_html_code(item_list, user_list), item_list, user_list)
